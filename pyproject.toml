@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "specoracle"
+version = "1.0.0"
+description = "Agentic Bug Detection in Code via Cross-Model Test Consensus"
+requires-python = ">=3.10"
+dependencies = [
+    "openai>=1.12.0",
+    "langgraph>=0.0.26",
+    "pydantic>=2.0.0",
+    "datasets>=2.14.0",
+    "pandas>=2.0.0",
+    "numpy>=1.24.0",
+    "scipy>=1.10.0",
+    "matplotlib>=3.7.0",
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0.0",
+    "tqdm>=4.65.0",
+    "streamlit>=1.30.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.3.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "."]
+testpaths = ["tests"]

@@ -1,0 +1,16 @@
+{
+  "seed": 42,
+  "n_problems": 5,
+  "task_ids": [
+    "Python/0",
+    "Python/1",
+    "Python/2",
+    "Python/3",
+    "Python/4"
+  ],
+  "bug_type_distribution": {
+    "operator_confusion": 2,
+    "boundary_condition": 2,
+    "missing_logic": 1
+  }
+}

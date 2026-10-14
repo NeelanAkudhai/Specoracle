@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.coverage
+htmlcov/
+*.sqlite
+cache/*.sqlite
+!cache/.gitkeep
+venv/
+.env
+results/raw/*.jsonl.tmp
+.DS_Store

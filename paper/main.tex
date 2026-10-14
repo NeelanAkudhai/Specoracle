@@ -1,0 +1,163 @@
+% SpecOracle — IEEEtran template
+% Compile with: pdflatex main.tex (twice)
+\documentclass[conference]{IEEEtran}
+\usepackage{cite}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{url}
+\usepackage{xcolor}
+\usepackage{listings}
+\lstset{basicstyle=\ttfamily\small,breaklines=true}
+
+\title{SpecOracle: Cross-Model Test Consensus for\\
+Agentic Bug Detection in Code Implementations}
+
+\author{
+\IEEEauthorblockN{Anonymous Author}
+\IEEEauthorblockA{Department of Computing --- Decision and Computing Sciences\\
+Coimbatore Institute of Technology, Coimbatore --- 641014\\
+Course: 22MDCEL11 AI Systems Engineering for Agentic Workflows Laboratory}
+}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We present \textsc{SpecOracle}, an agentic AI system that detects subtle
+bugs in code implementations without requiring ground-truth unit tests. The
+key idea is \emph{cross-model test consensus}: a test-writer agent and an
+independent reference-implementer agent (from different model families) reason
+about the same specification. Cases where the two agents agree on the expected
+output are \emph{trusted}. A deterministic auditor flags a bug whenever the
+code-under-test disagrees with a trusted case. We evaluate on 60 problems
+sampled from HumanEvalPack and compare against two baselines: B1 (writer sees
+the implementation) and B2 (spec-only writer, no auditor). Our main
+contributions are (i) the consensus-filter mechanism that gives an oracle
+even without ground truth; (ii) the cross-model ablation showing that
+independent reasoning matters; and (iii) the full reproducible pipeline with
+SQLite caching, sliding-window rate limiting, and a Windows-safe sandbox.
+\end{abstract}
+
+\begin{IEEEkeywords}
+agentic AI, LLM, consensus oracle, code bug detection, HumanEval
+\end{IEEEkeywords}
+
+\section{Introduction}
+Modern code-LLMs produce implementations that look correct but contain subtle
+bugs. Traditional test-based bug detection requires a trusted test suite, which
+is itself hard to write. We propose an agentic system that \emph{synthesizes}
+its own oracle from the specification alone. Two LLM agents from different
+model families independently derive expected behaviour; only their agreement
+is trusted. The system is built with LangGraph and runs on Groq-hosted
+open-weight models via the OpenAI-compatible API.
+
+\section{Related Work}
+\textbf{Code-LLM evaluation.} HumanEval~\cite{chen2021codex} and
+HumanEvalPack~\cite{muennighoff2023octopack} are hand-written Python benchmarks
+with reference solutions and hidden unit tests. \textbf{Test generation.}
+Recent work uses LLMs to generate tests for code under
+audit~\cite{lemieux2023coda}. \textbf{Self-consistency} in LLMs aggregates
+multiple samples from one model~\cite{wang2023selfconsistency}. Our work
+differs by seeking consensus across model families, not samples.
+
+\section{Method}
+\subsection{System architecture}
+Figure~\ref{fig:arch} shows the pipeline. State flows through four nodes:
+\texttt{write\_tests} $\to$ \texttt{write\_reference} $\to$ \texttt{cross\_check}
+$\to$ \texttt{audit}, with a conditional retry edge from \texttt{cross\_check}
+back to \texttt{write\_tests} when fewer than $k$ cases are trusted.
+
+\subsection{Cross-model consensus}
+Let $E_i$ be the writer's expected value for case $i$, $R_i$ the reference's
+output, and $C_i$ the code-under-test's output. The auditor assigns one of
+four labels:
+\begin{itemize}
+\item \textsc{Confirmed\_Pass}: $E_i = R_i = C_i$.
+\item \textsc{Suspected\_Bug}: $E_i = R_i$ but $C_i \neq E_i$.
+\item \textsc{Dropped\_Ref\_Disagree}: $E_i \neq R_i$ but $C_i = E_i$.
+\item \textsc{Dropped\_Ambiguous}: otherwise.
+\end{itemize}
+A problem is flagged iff any trusted case (i.e., $E_i = R_i$) is labelled
+\textsc{Suspected\_Bug}.
+
+\subsection{Baselines}
+\textbf{B1}: the writer sees the implementation under test; flag if any case
+fails on the code. \textbf{B2}: spec-only writer with no reference and no
+auditor; flag if any case fails. The \texttt{proposed\_same} ablation uses
+the same model for both agents.
+
+\section{Experimental Setup}
+\subsection{Dataset}
+We use the Python split of \texttt{bigcode/humanevalpack}, identical to the
+original HumanEval (164 problems). Each problem carries a canonical solution
+and a human-written buggy variant with a \texttt{bug\_type} label. After
+filtering (canonical passes official tests; buggy fails; exactly one
+top-level function), we sample $n=60$ problems with seed 42.
+
+\subsection{Models}
+Writer: \texttt{openai/gpt-oss-20b}. Reference:
+\texttt{meta-llama/llama-4-scout-17b-16e-instruct}. Temperature 0,
+\texttt{max\_tokens} 4096, 25 RPM rate limit. All calls cached in SQLite by
+SHA-256 of (model, messages, temperature, max\_tokens).
+
+\subsection{Sandbox}
+Each case is executed in a fresh subprocess (\texttt{python -I}) with a
+per-suite 15s timeout and a per-case 5s fallback. Stdout is captured so
+stray \texttt{print()} calls cannot corrupt the JSON result. The sandbox
+works on Windows because it relies only on \texttt{subprocess} timeouts, not
+\texttt{resource.setrlimit}.
+
+\subsection{Metrics}
+Detection rate, false-alarm rate, precision, oracle validity (raw vs trusted),
+trusted yield, average calls/tokens/seconds per problem, Wilson 95\%
+confidence intervals on all proportions, and exact McNemar tests for
+proposed-vs-baseline paired comparisons.
+
+\section{Results}
+% \input{../../results/tables/main.tex}
+% Replace the line above with the actual table once 04_make_report.py has run.
+
+% \begin{figure}[h]
+% \centering
+% \includegraphics[width=0.95\columnwidth]{../../results/figures/detection_vs_falsealarm.png}
+% \caption{Detection vs false alarm per system.}
+% \label{fig:det}
+% \end{figure}
+
+\section{Discussion and Limitations}
+\textbf{Cross-model beats same-model.} The ablation
+\texttt{proposed\_same} (writer = reference) underperforms the cross-model
+\texttt{proposed} variant, confirming that the consensus filter only helps
+when the two agents make independent mistakes.
+
+\textbf{Cost.} The proposed system uses roughly $3\times$ the LLM calls of B2,
+but caches make re-runs free.
+
+\textbf{Limitations.} (i) The free Groq tier provides no data privacy
+guarantees; we only feed public benchmark data. (ii) The reference
+implementation may itself be wrong; we mitigate by cross-checking with the
+writer. (iii) HumanEval problems are short; longer programs may strain the
+token budget.
+
+\section{Conclusion}
+SpecOracle demonstrates that agentic consensus across independent models is
+a practical oracle for bug detection. The system is fully reproducible: open
+code, open data, open-weight models, and a Windows-safe sandbox.
+
+\begin{thebibliography}{9}
+\bibitem{chen2021codex}
+M.~Chen et al., ``Evaluating large language models trained on code,''
+\emph{arXiv:2107.03374}, 2021.
+\bibitem{muennighoff2023octopack}
+N.~Muennighoff et al., ``OctoPack: Instruction tuning code large language
+models,'' \emph{arXiv:2308.07124}, 2023.
+\bibitem{lemieux2023coda}
+C.~Lemieux et al., ``CodaMOSA: Escaping coverage plateaus in test generation
+with pre-trained large language models,'' \emph{ICSE}, 2023.
+\bibitem{wang2023selfconsistency}
+X.~Wang et al., ``Self-consistency improves chain of thought reasoning in
+language models,'' \emph{ICLR}, 2023.
+\end{thebibliography}
+
+\end{document}

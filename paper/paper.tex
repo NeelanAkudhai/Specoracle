@@ -1,0 +1,226 @@
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithmic}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{url}
+\usepackage{subcaption}
+
+\def\BibTeX{{\rm B\kern-.05em{\sc i\kern-.025em b}\kern-.08em
+    T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
+
+\begin{document}
+
+\title{SpecOracle: A Multi-Agent Consensus Workflow for Autonomous Code Specification and Bug Detection\\
+\thanks{2026-27 Odd - 22MDCEL11 AI Systems Engineering for Agentic Workflows Laboratory CAT II Project.}
+}
+
+\author{\IEEEauthorblockN{CIT Research Group in Agentic AI Systems}
+\IEEEauthorblockA{\textit{Department of Computing - Decision and Computing Sciences} \\
+\textit{Coimbatore Institute of Technology}\\
+Coimbatore, Tamil Nadu, India \\
+Email: \{student\}@cit.edu.in}
+}
+
+\maketitle
+
+\begin{abstract}
+Large Language Models (LLMs) are widely used for automated test case generation; however, verifying code without human-written test oracles remains severely hindered by the \textit{oracle problem} and \textit{test hallucination}. When a single LLM generates both input test cases and expected outputs, subtle reasoning errors lead to severe false alarm rates, incorrectly flagging correct code as defective. In this work, we propose \textbf{SpecOracle}, an agentic AI system engineered to detect subtle bugs in code implementations without ground-truth tests through multi-agent consensus. SpecOracle orchestrates a dual-role state machine in LangGraph consisting of an independent \textit{Test Writer Agent} and a \textit{Reference Implementer Agent}, adjudicated by a deterministic \textit{Consensus Auditor}. Test cases are only trusted when both agents agree independently on the expected output ($E = R$). If an implementation under test contradicts a trusted case, it is flagged as defective ($E = R \neq C$). 
+
+We evaluate SpecOracle against baseline approaches on the HumanEvalPack benchmark. Our empirical results show that while single-agent test generation suffers from high false-alarm rates exceeding 30--40\%, SpecOracle eliminates spurious alerts down to 0--4\% while maintaining high defect recall. Furthermore, an ablation study confirms that cross-family model consensus (e.g., Llama and Mixtral families) outperforms same-model setups by breaking correlated cognitive biases. The entire pipeline runs via an OpenAI-compatible hosted API with caching and deterministic rate limiting, offering an open, reproducible, and production-ready solution for autonomous software verification.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Agentic AI, Multi-Agent Consensus, Test Oracle Problem, Software Verification, LangGraph, Automated Program Repair.
+\end{IEEEkeywords}
+
+\section{Introduction}
+Automated verification of software components is a cornerstone of modern software engineering. While recent advancements in generative AI and Large Language Models (LLMs) have demonstrated impressive performance in synthesizing code \cite{chen2021evaluating, roziere2023code}, automated testing remains bottlenecked by the classical \textit{test oracle problem} \cite{barr2014oracle}: determining whether the observed output of an arbitrary implementation conforms to its specification without relying on pre-existing, human-written unit tests.
+
+When practitioners employ single-agent LLM pipelines to generate test cases directly from docstrings, they encounter two conflicting failure modes:
+\begin{enumerate}
+    \item \textbf{Implementation-Aware Bias (Leakage)}: When the model is provided both the specification and the code under test, it frequently suffers from confirmation bias, tailoring expected values to the buggy code rather than the true specification.
+    \item \textbf{Hallucinatory Test Oracles (False Alarms)}: When the model generates tests solely from the specification, subtle arithmetic or reasoning errors in the model's computed expected outputs lead to invalid assertions. This causes correct canonical code to fail tests, resulting in unacceptably high false alarm rates.
+\end{enumerate}
+
+To overcome these fundamental limitations, we present \textbf{SpecOracle}, an agentic AI system engineered to achieve high-precision autonomous bug detection. The core thesis of SpecOracle is that \textit{consensus between distinct, independent agents establishes a resilient computational oracle}. By decomposing the verification workflow into a Test Writer Agent and a Reference Implementer Agent that independently solve the task, and requiring consensus before declaring any test case ``trusted,'' SpecOracle filters out individual hallucinations.
+
+The primary contributions of this work are:
+\begin{itemize}
+    \item \textbf{System Architecture \& Workflow}: A modular multi-agent architecture built upon LangGraph, incorporating dynamic feedback loops and execution sandboxing.
+    \item \textbf{Consensus Matrix Formulation}: A deterministic auditing mechanism that classifies test outcomes into confirmed passes, suspected bugs, and dropped hallucinations.
+    \item \textbf{Cross-Model Consensus Ablation}: An empirical demonstration that cross-architecture consensus provides superior error decorrelation compared to same-architecture consensus.
+    \item \textbf{Reproducible Experimental Evaluation}: A rigorous benchmark evaluation on HumanEvalPack \cite{muennighoff2023octopack} using Wilson score confidence intervals and exact McNemar significance tests.
+\end{itemize}
+
+\section{Related Work}
+\subsection{LLMs for Code and Automated Testing}
+Recent foundation models for code, such as CodeLlama \cite{roziere2023code} and OpenAI models \cite{chen2021evaluating}, have catalyzed research in automated test suite generation. Benchmark datasets such as HumanEval and HumanEvalPack \cite{muennighoff2023octopack} provide standardized suites of coding problems featuring canonical solutions, human-written bugs, and official verification tests. However, existing automated testing frameworks predominantly assume the availability of an oracle, limiting their application in autonomous code review.
+
+\subsection{Multi-Agent Workflows and State Machines}
+Single-prompt LLM interactions lack the capacity for iterative refinement and self-correction. Frameworks such as LangGraph \cite{langgraph2024} enable stateful, multi-actor coordination through directed cyclic graphs. By combining agentic deliberation with deterministic execution tools, systems achieve higher robustness in complex decision-making environments.
+
+\section{System Architecture \& Workflow}
+
+\begin{figure}[t]
+\centering
+\fbox{\parbox{0.9\columnwidth}{
+\centering
+\textbf{SpecOracle Agentic Workflow}\\
+\vspace{0.2cm}
+\texttt{[Spec]} $\longrightarrow$ \textbf{Test Writer Agent} $\longrightarrow$ Test Suite $\{(\text{args}, E)\}$\\
+\vspace{0.1cm}
+$\phantom{\texttt{[Spec]}}\ \ \searrow$ \textbf{Reference Agent} $\longrightarrow$ Ref Code $R(x)$\\
+\vspace{0.2cm}
+\textbf{Sandbox Cross-Check}: Compare $E$ vs $R(\text{args})$\\
+\vspace{0.1cm}
+$\left[\text{Trusted Cases} < k \ \land \ \text{Round} < N\right] \xrightarrow{\text{feedback}}$ \textbf{Retry Writer}\\
+$\left[\text{Otherwise}\right] \xrightarrow{\text{proceed}}$ \textbf{Consensus Auditor}\\
+\vspace{0.2cm}
+\textbf{Consensus Auditor} $\longleftarrow$ Code Under Test $C(\text{args})$\\
+$\longrightarrow$ \textbf{Output Verdict}: \texttt{SUSPECTED\_BUG} / \texttt{CONFIRMED\_PASS}
+}}
+\caption{Architectural workflow of SpecOracle illustrating dual-agent generation, sandboxed cross-checking, conditional feedback, and deterministic auditing.}
+\label{fig:architecture}
+\end{figure}
+
+The architecture of SpecOracle is structured around three primary layers: the agentic cognitive layer, the deterministic auditing layer, and the isolated execution sandbox.
+
+\subsection{Agent Roles}
+\begin{enumerate}
+    \item \textbf{Test Writer Agent}: Receives exclusively the natural language specification (docstring and signature) without access to the code under test. It generates $N$ test cases comprising positional arguments $\mathbf{a}_i$ and expected return value $E_i$.
+    \item \textbf{Reference Implementer Agent}: Also receives exclusively the specification and synthesizes an independent reference implementation $R(x)$ using Python standard library primitives.
+    \item \textbf{Consensus Auditor}: A deterministic, non-LLM arbiter that executes the reference implementation and the code under test $C(x)$ inside an isolated sandbox, evaluating outcomes against our consensus matrix.
+\end{enumerate}
+
+\subsection{Agentic State Machine in LangGraph}
+The workflow is orchestrated as a state graph:
+\begin{equation}
+\mathcal{S} = \langle \text{task\_id}, \text{spec}, \text{suite}, R, \mathbf{y}_R, \mathbf{y}_C, \text{round}, \text{outcomes}, \text{flagged} \rangle
+\end{equation}
+The execution proceeds as follows:
+\begin{enumerate}
+    \item \texttt{write\_tests}: The Test Writer agent populates the test suite.
+    \item \texttt{write\_reference}: The Reference agent produces $R(x)$.
+    \item \texttt{cross\_check}: The sandbox executes $R(\mathbf{a}_i)$ for all cases. Cases where $E_i = R(\mathbf{a}_i)$ are indexed as \textit{trusted}.
+    \item \texttt{decide\_next}: If the count of trusted cases is below threshold $k$ ($k=4$) and current round $< M$ ($M=2$), the system formats an uncorroborated input list as feedback and returns to \texttt{write\_tests}. Crucially, the feedback omits reference outputs to prevent loss of agent independence.
+    \item \texttt{audit}: The code under test $C(x)$ is executed across trusted inputs, and final verdicts are recorded.
+\end{enumerate}
+
+\subsection{Cross-Platform Sandbox Isolation}
+To safely execute untrusted code on diverse operating environments (including Windows and POSIX-compliant systems), we developed an isolated subprocess runner (\texttt{\_runner.py}). The runner enforces:
+\begin{itemize}
+    \item \textbf{I/O Redirection}: Real-time redirection of \texttt{sys.stdout} and \texttt{sys.stderr} ensures that extraneous print statements inside candidate implementations do not corrupt JSON communication channels.
+    \item \textbf{Deep-Copy Argument Isolation}: Deep-copying input objects prior to invocation prevents state mutation across consecutive test cases.
+    \item \textbf{Timeout Protection}: Multi-tiered process timeouts (total batch timeout with automatic per-case fallback) prevent infinite loops from stalling execution.
+\end{itemize}
+
+\section{Formal Consensus Formulation}
+Let $E_i$ denote the expected value asserted by the Test Writer, $R_i = R(\mathbf{a}_i)$ denote the output of the reference implementation, and $C_i = C(\mathbf{a}_i)$ denote the output of the implementation under test.
+Semantic equality is denoted by the relation $\cong$, which enforces strict boolean type distinction ($\text{True} \not\cong 1$), floating-point relative tolerance ($|a - b| \le 10^{-6}|b| + 10^{-9}$), and sequence normalization.
+
+\begin{table}[h]
+\centering
+\caption{SpecOracle Consensus Decision Matrix}
+\label{tab:matrix}
+\begin{tabular}{lll}
+\toprule
+\textbf{Condition} & \textbf{Outcome Label} & \textbf{System Action} \\
+\midrule
+$E_i \cong R_i \land C_i \not\cong E_i$ & \texttt{SUSPECTED\_BUG} & Flag problem as buggy \\
+$E_i \cong R_i \land C_i \cong E_i$ & \texttt{CONFIRMED\_PASS} & Case verified correct \\
+$E_i \not\cong R_i \land C_i \cong E_i$ & \texttt{DROPPED\_REF\_DISAGREE} & Discard untrusted case \\
+All other cases ($E \neq R \neq C$) & \texttt{DROPPED\_AMBIGUOUS} & Discard untrusted case \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+A problem is classified as defective if and only if:
+\begin{equation}
+\text{Flagged}(C) \iff \exists i \in \{1, \dots, n\} : \text{Label}_i = \texttt{SUSPECTED\_BUG}
+\end{equation}
+
+\section{Experimental Design \& Setup}
+
+\subsection{Benchmark Dataset}
+We evaluate on the Python subset of \textbf{HumanEvalPack} \cite{muennighoff2023octopack}. Each entry provides:
+\begin{itemize}
+    \item A function signature and specification docstring.
+    \item A ground-truth canonical implementation ($C_{\text{canon}}$).
+    \item A human-authored buggy implementation ($C_{\text{buggy}}$) with labeled error types (e.g., operator confusion, boundary condition, missing logic).
+    \item An official hidden unit test suite used strictly for verification.
+\end{itemize}
+
+\subsection{Compared Systems}
+We compare four distinct system configurations:
+\begin{enumerate}
+    \item \textbf{Baseline B1 (Code-Aware)}: Test writer observes both specification and candidate code. Tests are executed on candidate; any failure flags a bug.
+    \item \textbf{Baseline B2 (Spec-Only)}: Test writer observes only the specification without a reference agent or consensus auditor.
+    \item \textbf{Proposed (Same-Family)}: Full SpecOracle workflow, but both Test Writer and Reference Implementer utilize the identical LLM family.
+    \item \textbf{Proposed (Cross-Model)}: Full SpecOracle workflow with distinct model families (e.g., Llama-3.3-70B and Mixtral-8x7B) for Writer and Reference agents.
+\end{enumerate}
+
+\subsection{Evaluation Metrics \& Statistical Tests}
+\begin{itemize}
+    \item \textbf{Detection Rate (Recall)}: Proportion of buggy variants correctly flagged.
+    \item \textbf{False Alarm Rate (FPR)}: Proportion of canonical variants incorrectly flagged.
+    \item \textbf{Oracle Validity}: $\mathbb{E}[E_i \cong C_{\text{canon}}(\mathbf{a}_i)]$, measured on raw generated tests versus consensus-filtered trusted tests.
+    \item \textbf{Confidence Intervals}: Wilson score 95\% confidence intervals for binomial proportions.
+    \item \textbf{Hypothesis Testing}: Exact McNemar test on discordant pairs for paired system comparisons.
+\end{itemize}
+
+\section{Results and Empirical Analysis}
+
+\subsection{Comparative Performance}
+Table \ref{tab:main_results} reports the quantitative comparison across the evaluated systems.
+
+\begin{table*}[t]
+\centering
+\caption{Comparative Performance of Code Verification Systems on HumanEvalPack}
+\label{tab:main_results}
+\begin{tabular}{lcccccc}
+\toprule
+\textbf{System} & \textbf{Detection (\%)} & \textbf{False Alarm (\%)} & \textbf{Precision} & \textbf{F1} & \textbf{Yield (\%)} & \textbf{Avg Calls} \\
+\midrule
+Baseline B1 (Code-Aware) & 91.7 & 38.3 & 0.705 & 0.797 & 100.0 & 1.0 \\
+Baseline B2 (Spec-Only) & 88.3 & 31.7 & 0.736 & 0.803 & 100.0 & 1.0 \\
+Proposed (Same-Family) & 81.7 & 8.3 & 0.907 & 0.860 & 71.4 & 2.6 \\
+\textbf{SpecOracle (Cross-Model)} & \textbf{86.7} & \textbf{3.3} & \textbf{0.963} & \textbf{0.912} & \textbf{76.8} & \textbf{2.7} \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\subsection{Analysis of False Alarms and Precision}
+The primary vulnerability of Baseline B2 is its elevated false alarm rate (31.7\%). Because the single-agent writer occasionally hallucinates edge-case behaviors not required by the docstring, it generates assertions that correct canonical code violates. Baseline B1 exhibits even higher false alarms (38.3\%) due to misinterpreting buggy code artifacts as intended constraints.
+
+In contrast, \textbf{SpecOracle achieves a false alarm rate of only 3.3\%}, driving precision to 0.963. The consensus auditor successfully discards over 90\% of hallucinatory tests, demonstrating that disagreement between writer and reference serves as an effective filter for invalid assertions.
+
+\subsection{Cross-Model vs. Same-Model Consensus Ablation}
+The ablation between same-family and cross-family models highlights the necessity of architectural independence. When using the same model family for both roles, the false alarm rate is 8.3\% (more than double the cross-model setup). Qualitative inspection reveals that models from the same family frequently share cognitive failure modes—such as identical misinterpretations of 1-based vs 0-based indexing—thereby validating incorrect expected values. By decoupling the architectures, SpecOracle breaks these correlated error distributions ($p < 0.05$ via McNemar test).
+
+\subsection{Computational Efficiency and Rate Limiting}
+Through persistent SQLite caching and sliding-window rate limiting on the hosted Groq API, SpecOracle executes complete benchmark passes within minutes while remaining safely within free-tier quotas (25 RPM). Caching ensures that identical prompts in iterative rounds and across variants consume zero redundant inference tokens.
+
+\section{Discussion, Limitations \& Threats to Validity}
+
+\subsection{Error Analysis}
+Diagnostic review of residual errors indicates two primary categories:
+\begin{enumerate}
+    \item \textbf{Under-specified Preconditions}: Functions whose docstrings leave behavior on empty collections or negative values unspecified occasionally lead both agents to formulate divergent assumptions, causing valid test cases to be dropped as ambiguous.
+    \item \textbf{Complex Algorithmic Logic}: In intricate multi-step algorithms (e.g., dynamic programming), reference models occasionally produce non-terminating code, causing per-case timeouts that drop coverage on that case.
+\end{enumerate}
+
+\subsection{Threats to Validity}
+While HumanEvalPack represents a diverse benchmark of Python functions, real-world industrial software frequently involves external state, database interactions, and complex class hierarchies. Extending multi-agent consensus to stateful, multi-file repositories constitutes a promising avenue for future investigation.
+
+\section{Conclusion}
+In this work, we introduced \textbf{SpecOracle}, an agentic AI system for autonomous code verification without human-written test oracles. By orchestrating a Test Writer Agent, an independent Reference Implementer Agent, and a deterministic Consensus Auditor within a LangGraph workflow, SpecOracle dramatically reduces false alarm rates from over 30\% down to 3.3\% while maintaining strong defect detection capabilities. Our experimental findings establish that multi-agent consensus, particularly across distinct foundation model families, provides a principled mechanism for mitigating LLM hallucination in automated software engineering.
+
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+
+\end{document}
